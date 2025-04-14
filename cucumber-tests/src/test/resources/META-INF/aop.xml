@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<aspectj>
+    <aspects>
+        <!-- Define the aspect class -->
+        <aspect name="com.example.coverage.CucumberCoverageAgent"/>
+    </aspects>
+
+    <weaver options="-verbose -showWeaveInfo">
+        <!-- Include only the calculator classes -->
+        <include within="com.example.calculator.*"/>
+
+        <!-- Exclude test classes -->
+        <exclude within="*.test.*"/>
+        <exclude within="*.Cucumber*"/>
+        <exclude within="io.cucumber..*"/>
+        <exclude within="org.junit..*"/>
+    </weaver>
+</aspectj>

@@ -1,0 +1,148 @@
+plugins {
+    id 'java'
+    id 'jacoco'
+    id 'io.freefair.aspectj.post-compile-weaving' version '8.4'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+repositories {
+    mavenCentral()
+}
+
+def cucumberVersion = '7.15.0'
+
+dependencies {
+    implementation project(':')
+
+    // AspectJ runtime and weaver (weaving handled by plugin)
+    implementation 'org.aspectj:aspectjrt:1.9.21'
+    implementation 'org.aspectj:aspectjweaver:1.9.21'
+    implementation      "com.fasterxml.jackson.core:jackson-databind:2.16.0"
+
+    // Cucumber + JUnit
+    testImplementation "io.cucumber:cucumber-java:${cucumberVersion}"
+    testImplementation "io.cucumber:cucumber-junit-platform-engine:${cucumberVersion}"
+    testImplementation 'org.junit.platform:junit-platform-suite:1.10.2'
+    testImplementation 'org.junit.platform:junit-platform-suite-api:1.10.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.2'
+
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+}
+
+// Resource setup for test
+sourceSets {
+    test {
+        resources {
+            srcDirs = ['src/test/resources']
+        }
+    }
+}
+
+test {
+    useJUnitPlatform()
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+    jvmArgs '-Djdk.attach.allowAttachSelf=true'
+    jvmArgs '-noverify'
+
+    // Enable AspectJ weaving agent
+    doFirst {
+        jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
+        jvmArgs "-Daj.weaving.verbose=true"
+    }
+
+    systemProperty 'cucumber.execution.dry-run', 'false'
+    systemProperty 'cucumber.glue', 'com.example.calculatorT'
+    systemProperty 'cucumber.plugin', 'pretty'
+    systemProperty 'cucumber.features', 'classpath:features'
+
+    testLogging {
+        events "passed", "skipped", "failed", "standardOut", "standardError"
+        showExceptions true
+        showCauses true
+        showStackTraces true
+        exceptionFormat = 'full'
+    }
+
+    finalizedBy jacocoTestReport
+}
+
+shadowJar {
+    archiveClassifier.set('all')
+}
+
+tasks.register('cucumberTests', Test) {
+    description = 'Runs Cucumber tests with coverage'
+    group = 'verification'
+
+    useJUnitPlatform()
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+    jvmArgs '-Djdk.attach.allowAttachSelf=true'
+    jvmArgs '-noverify'
+
+    doFirst {
+        jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
+        jvmArgs "-Daj.weaving.verbose=true"
+    }
+
+    systemProperty 'cucumber.execution.dry-run', 'false'
+    systemProperty 'cucumber.glue', 'com.example.calculatorT'
+    systemProperty 'cucumber.plugin', 'pretty'
+    systemProperty 'cucumber.features', 'classpath:features'
+
+    testLogging {
+        events "passed", "skipped", "failed", "standardOut", "standardError"
+        showExceptions true
+        showCauses true
+        showStackTraces true
+        exceptionFormat = 'full'
+    }
+
+    jacoco {
+        destinationFile = file("${buildDir}/jacoco/cucumber.exec")
+    }
+
+    finalizedBy 'jacocoCucumberReport'
+}
+
+tasks.register('jacocoCucumberReport', JacocoReport) {
+    description = 'Generates code coverage report for Cucumber tests'
+    group = 'reporting'
+    dependsOn 'cucumberTests'
+
+    executionData file("${buildDir}/jacoco/cucumber.exec")
+    sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
+    classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
+
+    reports {
+        xml.required = true
+        html.required = true
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/cucumber')
+    }
+}
+
+// Task to run DeepSeek analysis
+task runDeepSeekAnalysis(type: JavaExec) {
+    description = 'Runs DeepSeek 7B analysis on the codebase for intelligent test coverage'
+    group = 'analysis'
+
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.coverage.DeepSeekAnalyzer'
+
+    // Pass arguments to the DeepSeek analyzer
+args = [
+        '/Users/nhammerschmidt/work/calculator-project/src/main/java',                               // Source directory
+        'build/reports/deepseek',                      // Output directory
+        '/Users/nhammerschmidt/work/calculator-project/cucumber-tests/src/main/java/com/example/coverage/run_deepseek.sh'  // DeepSeek installation path (update as needed)
+]
+}
+
+jacocoTestReport {
+    reports {
+        xml.required = true
+        html.required = true
+    }
+
+    sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
+    classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
+}

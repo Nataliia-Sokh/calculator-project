@@ -1,0 +1,3 @@
+FROM llama2
+
+PARAMETER quantized-path=./deepseek-coder-6.7b-instruct.Q5_K_M.gguf
