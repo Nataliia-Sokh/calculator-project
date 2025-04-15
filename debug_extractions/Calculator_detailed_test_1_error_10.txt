@@ -1,0 +1,6 @@
+Error: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+Content:
+{[?25l[?25h
+[?25l[?25h       [?25l[?25h this[?25l[?25h.[?25l[?25hresult[?25l[?25h = [?25l[?25h0[?25l[?25h;[?25l[?25h
+[?25l[?25h   [?25l[?25h }
