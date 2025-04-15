@@ -7,11 +7,13 @@
 
     <weaver options="-verbose -showWeaveInfo">
         <!-- Include only the calculator classes -->
-        <include within="com.example.calculator.*"/>
+        <include within="com.example.calculator.Calculator"/>
+        <include within="com.example.calculator.Operation"/>
 
         <!-- Exclude test classes -->
         <exclude within="*.test.*"/>
-        <exclude within="*.Cucumber*"/>
+        <exclude within="com.example.coverage..*"/>
+        <exclude within="com.example.calculatorT"/>
         <exclude within="io.cucumber..*"/>
         <exclude within="org.junit..*"/>
     </weaver>

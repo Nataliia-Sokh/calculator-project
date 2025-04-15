@@ -20,4 +20,9 @@ import static io.cucumber.junit.platform.engine.Constants.FEATURES_PROPERTY_NAME
 @ConfigurationParameter(key = FEATURES_PROPERTY_NAME, value = "classpath:features")
 public class RunCucumberTest {
     // Empty class - the annotations do all the work
+    // Log something to verify the test runner class is loaded
+    static {
+        System.out.println("RunCucumberTest class initialized - Cucumber test discovery should start now");
+    }
+
 }

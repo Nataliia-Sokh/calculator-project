@@ -5,8 +5,16 @@ plugins {
     id 'com.github.johnrengelman.shadow' version '8.1.1'
 }
 
+// Java compatibility settings
+sourceCompatibility = JavaVersion.VERSION_17
+targetCompatibility = JavaVersion.VERSION_17
+
 repositories {
     mavenCentral()
+}
+// Global JaCoCo configuration
+jacoco {
+    toolVersion = "0.8.11"  // Set tool version globally
 }
 
 def cucumberVersion = '7.15.0'
@@ -17,7 +25,7 @@ dependencies {
     // AspectJ runtime and weaver (weaving handled by plugin)
     implementation 'org.aspectj:aspectjrt:1.9.21'
     implementation 'org.aspectj:aspectjweaver:1.9.21'
-    implementation      "com.fasterxml.jackson.core:jackson-databind:2.16.0"
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.16.0"
 
     // Cucumber + JUnit
     testImplementation "io.cucumber:cucumber-java:${cucumberVersion}"
@@ -64,6 +72,13 @@ test {
         exceptionFormat = 'full'
     }
 
+    // The most important part - ensure JaCoCo is properly attached
+    jacoco {
+        destinationFile = file("${buildDir}/jacoco/test.exec")
+        // Explicitly include classes from the main project
+        includes = ['com.example.calculator.*']
+    }
+
     finalizedBy jacocoTestReport
 }
 
@@ -71,15 +86,20 @@ shadowJar {
     archiveClassifier.set('all')
 }
 
+// Fixed task configuration for Cucumber tests with coverage
 tasks.register('cucumberTests', Test) {
     description = 'Runs Cucumber tests with coverage'
     group = 'verification'
 
     useJUnitPlatform()
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+
     jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
     jvmArgs '-Djdk.attach.allowAttachSelf=true'
     jvmArgs '-noverify'
 
+    // Configure AspectJ weaving
     doFirst {
         jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
         jvmArgs "-Daj.weaving.verbose=true"
@@ -90,15 +110,12 @@ tasks.register('cucumberTests', Test) {
     systemProperty 'cucumber.plugin', 'pretty'
     systemProperty 'cucumber.features', 'classpath:features'
 
-    testLogging {
-        events "passed", "skipped", "failed", "standardOut", "standardError"
-        showExceptions true
-        showCauses true
-        showStackTraces true
-        exceptionFormat = 'full'
-    }
-
+    // JaCoCo configuration - do NOT set toolVersion here
     jacoco {
+        // The tool version is set at the project level, not the task level
+        enabled = true
+        includes = ['com.example.calculator.*']
+        excludes = ['com.example.coverage.*', 'com.example.calculatorT.*']
         destinationFile = file("${buildDir}/jacoco/cucumber.exec")
     }
 
@@ -121,6 +138,44 @@ tasks.register('jacocoCucumberReport', JacocoReport) {
     }
 }
 
+// Add new aggregated report task
+tasks.register('jacocoAggregatedReport', JacocoReport) {
+    description = 'Generates aggregated code coverage report combining unit tests and Cucumber tests'
+    group = 'reporting'
+
+    // This task depends on both unit tests and cucumber tests reports
+    dependsOn(tasks.getByPath(':test'), 'cucumberTests')
+
+    // Include execution data from both test types
+    executionData fileTree(dir: "${buildDir}", includes: [
+            'jacoco/test.exec',       // Unit test data
+            'jacoco/cucumber.exec'    // Cucumber test data
+    ])
+
+    // Source directories from main project
+    sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
+    classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
+
+    reports {
+        xml.required = true
+        html.required = true
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/aggregated')
+    }
+}
+
+// Task to generate the HTML coverage report
+tasks.register('generateCoverageReport', JavaExec) {
+    description = 'Generates HTML report showing correlation between scenarios and methods'
+    group = 'reporting'
+
+    mainClass = 'com.example.coverage.GenerateCoverageReport'
+    classpath = sourceSets.main.runtimeClasspath
+
+    // This task should run after the cucumber tests have completed
+    dependsOn 'cucumberTests'
+    mustRunAfter 'jacocoCucumberReport'
+}
+
 // Task to run DeepSeek analysis
 task runDeepSeekAnalysis(type: JavaExec) {
     description = 'Runs DeepSeek 7B analysis on the codebase for intelligent test coverage'
@@ -130,11 +185,11 @@ task runDeepSeekAnalysis(type: JavaExec) {
     mainClass = 'com.example.coverage.DeepSeekAnalyzer'
 
     // Pass arguments to the DeepSeek analyzer
-args = [
-        '/Users/nhammerschmidt/work/calculator-project/src/main/java',                               // Source directory
-        'build/reports/deepseek',                      // Output directory
-        '/Users/nhammerschmidt/work/calculator-project/cucumber-tests/src/main/java/com/example/coverage/run_deepseek.sh'  // DeepSeek installation path (update as needed)
-]
+    args = [
+            project(':').projectDir.toString() + '/src/main/java',    // Source directory
+            'build/reports/deepseek',                                 // Output directory
+            file('src/main/java/com/example/coverage/run_deepseek.sh').absolutePath  // DeepSeek script path
+    ]
 }
 
 jacocoTestReport {
@@ -143,6 +198,28 @@ jacocoTestReport {
         html.required = true
     }
 
+    // The critical part - make sure we're analyzing the main project's classes
     sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
     classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
+}
+
+// Add a custom task that will run all test types and generate all reports
+task fullCoverageReport {
+    description = 'Runs all tests and generates all coverage reports (unit, cucumber, and aggregated)'
+    group = 'verification'
+
+    // Make sure all tests and reports run in the correct order
+    dependsOn tasks.getByPath(':test')          // Run unit tests first
+    dependsOn 'cucumberTests'                   // Then run cucumber tests
+    dependsOn 'jacocoTestReport'                // Generate unit test report
+    dependsOn 'jacocoCucumberReport'            // Generate cucumber test report
+    dependsOn 'jacocoAggregatedReport'          // Generate aggregated report
+    dependsOn 'generateCoverageReport'          // Generate HTML correlation report
+
+    // Force the correct execution order
+    tasks.findByName('generateCoverageReport').mustRunAfter('jacocoCucumberReport')
+    tasks.findByName('jacocoAggregatedReport').mustRunAfter('jacocoTestReport', 'jacocoCucumberReport')
+    tasks.findByName('jacocoCucumberReport').mustRunAfter('cucumberTests')
+    tasks.findByName('jacocoTestReport').mustRunAfter(tasks.getByPath(':test'))
+    tasks.findByName('cucumberTests').mustRunAfter(tasks.getByPath(':test'))
 }
