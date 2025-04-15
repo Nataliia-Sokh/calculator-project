@@ -32,9 +32,27 @@ test {
     finalizedBy jacocoTestReport
 }
 
+
+
 jacocoTestReport {
     reports {
         xml.required = true
         html.required = true
+    }
+}
+
+task printJacocoPath {
+    description = 'Prints the path to the JaCoCo agent JAR'
+    group = 'help'
+
+    doLast {
+        def jacocoConfiguration = project.configurations.detachedConfiguration(
+                project.dependencies.create("org.jacoco:org.jacoco.agent:${jacoco.toolVersion}"))
+        def agentJar = jacocoConfiguration.find { it.name.contains('jacocoagent.jar') }
+        if (agentJar) {
+            println agentJar.absolutePath
+        } else {
+            println "JaCoCo agent JAR not found"
+        }
     }
 }

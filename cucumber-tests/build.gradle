@@ -49,14 +49,53 @@ sourceSets {
 
 test {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+shadowJar {
+    archiveClassifier.set('all')
+}
+
+// Force the use of a custom AspectJ configuration
+// This ensures the CucumberCoverageAgent works correctly
+task configureCucumberCoverage(type: Copy) {
+    description = 'Ensures the AspectJ configuration is properly set'
+    group = 'build'
+
+    from 'src/test/resources/META-INF/aop.xml'
+    into "${buildDir}/resources/main/META-INF"
+    into "${buildDir}/resources/test/META-INF"
+
+    doLast {
+        println "AspectJ configuration file copied to META-INF directories"
+    }
+}
+
+// Runs Cucumber tests with AspectJ weaving for method tracking
+tasks.register('cucumberTests', Test) {
+    description = 'Runs Cucumber tests with AspectJ weaving for method tracking'
+    group = 'verification'
+
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+
     jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
     jvmArgs '-Djdk.attach.allowAttachSelf=true'
     jvmArgs '-noverify'
 
-    // Enable AspectJ weaving agent
+    // Configure AspectJ weaving with proper visibility
     doFirst {
-        jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
+        def aspectjWeaverJar = configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }
+        jvmArgs "-javaagent:${aspectjWeaverJar}"
         jvmArgs "-Daj.weaving.verbose=true"
+
+        // Pass additional system properties to ensure hooks are called
+        systemProperty 'cucumber.coverage.enabled', 'true'
+
+        // Debug info
+        println "AspectJ weaver jar: ${aspectjWeaverJar}"
+        println "Classpath includes Calculator: ${classpath.asPath.contains('Calculator')}"
     }
 
     systemProperty 'cucumber.execution.dry-run', 'false'
@@ -72,47 +111,39 @@ test {
         exceptionFormat = 'full'
     }
 
-    // The most important part - ensure JaCoCo is properly attached
-    jacoco {
-        destinationFile = file("${buildDir}/jacoco/test.exec")
-        // Explicitly include classes from the main project
-        includes = ['com.example.calculator.*']
+    // Add explicit task dependencies
+    dependsOn 'configureCucumberCoverage'
+
+    // Add explicit task to run at the end
+    doLast {
+        println "Cucumber method tracking completed. Generating method coverage report..."
+        // Ensure the reports directory exists
+        file("build/reports").mkdirs()
     }
-
-    finalizedBy jacocoTestReport
 }
 
-shadowJar {
-    archiveClassifier.set('all')
-}
-
-// Fixed task configuration for Cucumber tests with coverage
-tasks.register('cucumberTests', Test) {
-    description = 'Runs Cucumber tests with coverage'
+// Separate run for JaCoCo code coverage
+tasks.register('cucumberWithCoverage', Test) {
+    description = 'Runs Cucumber tests with JaCoCo for coverage measurement'
     group = 'verification'
 
     useJUnitPlatform()
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
 
-    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
-    jvmArgs '-Djdk.attach.allowAttachSelf=true'
-    jvmArgs '-noverify'
-
-    // Configure AspectJ weaving
-    doFirst {
-        jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
-        jvmArgs "-Daj.weaving.verbose=true"
-    }
+    // Add explicit dependency on configureCucumberCoverage
+    dependsOn 'configureCucumberCoverage'
 
     systemProperty 'cucumber.execution.dry-run', 'false'
     systemProperty 'cucumber.glue', 'com.example.calculatorT'
     systemProperty 'cucumber.plugin', 'pretty'
     systemProperty 'cucumber.features', 'classpath:features'
 
-    // JaCoCo configuration - do NOT set toolVersion here
+    // Disable AspectJ to avoid conflicts
+    systemProperty 'cucumber.coverage.enabled', 'false'
+
+    // JaCoCo configuration
     jacoco {
-        // The tool version is set at the project level, not the task level
         enabled = true
         includes = ['com.example.calculator.*']
         excludes = ['com.example.coverage.*', 'com.example.calculatorT.*']
@@ -122,12 +153,14 @@ tasks.register('cucumberTests', Test) {
     finalizedBy 'jacocoCucumberReport'
 }
 
+// Generate JaCoCo report for Cucumber tests
 tasks.register('jacocoCucumberReport', JacocoReport) {
     description = 'Generates code coverage report for Cucumber tests'
     group = 'reporting'
-    dependsOn 'cucumberTests'
+    dependsOn 'cucumberWithCoverage'
 
     executionData file("${buildDir}/jacoco/cucumber.exec")
+
     sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
     classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
 
@@ -138,21 +171,48 @@ tasks.register('jacocoCucumberReport', JacocoReport) {
     }
 }
 
-// Add new aggregated report task
+// Generate HTML report showing correlation between scenarios and methods
+tasks.register('generateCoverageReport', JavaExec) {
+    description = 'Generates HTML report showing correlation between scenarios and methods'
+    group = 'reporting'
+
+    mainClass = 'com.example.coverage.GenerateCoverageReport'
+    classpath = sourceSets.main.runtimeClasspath
+
+    // Check if the coverage file exists before running
+    doFirst {
+        def coverageFile = file("build/reports/cucumber-method-coverage.csv")
+        if (!coverageFile.exists()) {
+            def altFile = file("../build/reports/cucumber-method-coverage.csv")
+            if (altFile.exists()) {
+                println "Found coverage file in parent directory, copying..."
+                copy {
+                    from altFile
+                    into "build/reports"
+                }
+            } else {
+                logger.warn("Warning: cucumber-method-coverage.csv not found. Running cucumberTests task first...")
+                tasks.getByName('cucumberTests').execute()
+            }
+        }
+    }
+
+    // Add explicit task dependencies
+    dependsOn 'cucumberTests'
+}
+
+// Generate aggregated JaCoCo report
 tasks.register('jacocoAggregatedReport', JacocoReport) {
     description = 'Generates aggregated code coverage report combining unit tests and Cucumber tests'
     group = 'reporting'
 
-    // This task depends on both unit tests and cucumber tests reports
-    dependsOn(tasks.getByPath(':test'), 'cucumberTests')
+    dependsOn(tasks.getByPath(':test'), 'cucumberWithCoverage')
 
-    // Include execution data from both test types
     executionData fileTree(dir: "${buildDir}", includes: [
-            'jacoco/test.exec',       // Unit test data
-            'jacoco/cucumber.exec'    // Cucumber test data
+            'jacoco/test.exec',
+            'jacoco/cucumber.exec'
     ])
 
-    // Source directories from main project
     sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
     classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
 
@@ -163,33 +223,59 @@ tasks.register('jacocoAggregatedReport', JacocoReport) {
     }
 }
 
-// Task to generate the HTML coverage report
-tasks.register('generateCoverageReport', JavaExec) {
-    description = 'Generates HTML report showing correlation between scenarios and methods'
-    group = 'reporting'
+// Diagnostic tool for CucumberCoverageAgent
+task diagnoseCoverageAgent(type: JavaExec) {
+    description = 'Diagnoses issues with the CucumberCoverageAgent'
+    group = 'verification'
 
-    mainClass = 'com.example.coverage.GenerateCoverageReport'
-    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.calculatorT.CoverageAgentDiagnostic'
+    classpath = sourceSets.test.runtimeClasspath
 
-    // This task should run after the cucumber tests have completed
-    dependsOn 'cucumberTests'
-    mustRunAfter 'jacocoCucumberReport'
+    // Make sure the AspectJ weaving is applied
+    jvmArgs "--add-opens=java.base/java.lang=ALL-UNNAMED"
+    jvmArgs "-javaagent:${configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }}"
+    jvmArgs "-Daj.weaving.verbose=true"
+
+    // Add explicit dependency on configureCucumberCoverage
+    dependsOn 'configureCucumberCoverage'
+
+    doFirst {
+        println "Running CucumberCoverageAgent diagnostic..."
+    }
 }
 
-// Task to run DeepSeek analysis
-task runDeepSeekAnalysis(type: JavaExec) {
-    description = 'Runs DeepSeek 7B analysis on the codebase for intelligent test coverage'
-    group = 'analysis'
+// Ensure AspectJ configuration is set up before tests run
+tasks.getByName('compileTestJava').finalizedBy('configureCucumberCoverage')
 
-    classpath = sourceSets.main.runtimeClasspath
-    mainClass = 'com.example.coverage.DeepSeekAnalyzer'
+// Main workflow task that runs everything
+task fullCoverageWorkflow {
+    description = 'Runs the complete workflow with both AspectJ tracking and JaCoCo coverage'
+    group = 'verification'
 
-    // Pass arguments to the DeepSeek analyzer
-    args = [
-            project(':').projectDir.toString() + '/src/main/java',    // Source directory
-            'build/reports/deepseek',                                 // Output directory
-            file('src/main/java/com/example/coverage/run_deepseek.sh').absolutePath  // DeepSeek script path
-    ]
+    // First run the AspectJ method tracking
+    dependsOn 'cucumberTests'
+
+    // Let's ensure the coverage report is generated
+    dependsOn 'generateCoverageReport'
+
+    // Then run JaCoCo coverage instrumentation
+    dependsOn 'cucumberWithCoverage'
+    dependsOn 'jacocoCucumberReport'
+    dependsOn 'jacocoAggregatedReport'
+
+    // Ensure proper task ordering
+    tasks.findByName('generateCoverageReport').mustRunAfter('cucumberTests')
+    tasks.findByName('cucumberWithCoverage').mustRunAfter('generateCoverageReport')
+    tasks.findByName('jacocoCucumberReport').mustRunAfter('cucumberWithCoverage')
+    tasks.findByName('jacocoAggregatedReport').mustRunAfter('jacocoCucumberReport')
+}
+
+// Legacy task name for backward compatibility
+task fullCoverageReport {
+    description = 'Alias for fullCoverageWorkflow'
+    group = 'verification'
+
+    dependsOn 'fullCoverageWorkflow'
 }
 
 jacocoTestReport {
@@ -198,28 +284,28 @@ jacocoTestReport {
         html.required = true
     }
 
-    // The critical part - make sure we're analyzing the main project's classes
+    // Make sure we're analyzing the main project's classes
     sourceDirectories.from = files(project(':').sourceSets.main.allSource.srcDirs)
     classDirectories.from = files(project(':').sourceSets.main.output.classesDirs)
 }
 
-// Add a custom task that will run all test types and generate all reports
-task fullCoverageReport {
-    description = 'Runs all tests and generates all coverage reports (unit, cucumber, and aggregated)'
-    group = 'verification'
+test {
+    useJUnitPlatform()
 
-    // Make sure all tests and reports run in the correct order
-    dependsOn tasks.getByPath(':test')          // Run unit tests first
-    dependsOn 'cucumberTests'                   // Then run cucumber tests
-    dependsOn 'jacocoTestReport'                // Generate unit test report
-    dependsOn 'jacocoCucumberReport'            // Generate cucumber test report
-    dependsOn 'jacocoAggregatedReport'          // Generate aggregated report
-    dependsOn 'generateCoverageReport'          // Generate HTML correlation report
+    // Add explicit dependency on configureCucumberCoverage
+    dependsOn 'configureCucumberCoverage'
 
-    // Force the correct execution order
-    tasks.findByName('generateCoverageReport').mustRunAfter('jacocoCucumberReport')
-    tasks.findByName('jacocoAggregatedReport').mustRunAfter('jacocoTestReport', 'jacocoCucumberReport')
-    tasks.findByName('jacocoCucumberReport').mustRunAfter('cucumberTests')
-    tasks.findByName('jacocoTestReport').mustRunAfter(tasks.getByPath(':test'))
-    tasks.findByName('cucumberTests').mustRunAfter(tasks.getByPath(':test'))
+    // If you need AspectJ weaving for this task, add:
+    jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+    jvmArgs '-Djdk.attach.allowAttachSelf=true'
+    jvmArgs '-noverify'
+
+    // Configure AspectJ weaving
+    doFirst {
+        def aspectjWeaverJar = configurations.runtimeClasspath.find { it.name.contains('aspectjweaver') }
+        jvmArgs "-javaagent:${aspectjWeaverJar}"
+        jvmArgs "-Daj.weaving.verbose=true"
+    }
+
+    finalizedBy jacocoTestReport
 }

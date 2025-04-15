@@ -6,14 +6,13 @@
     </aspects>
 
     <weaver options="-verbose -showWeaveInfo">
-        <!-- Include only the calculator classes -->
-        <include within="com.example.calculator.Calculator"/>
-        <include within="com.example.calculator.Operation"/>
+        <!-- Include all calculator classes with broader scope -->
+        <include within="com.example.calculator.*"/>
 
-        <!-- Exclude test classes -->
+        <!-- Exclude test classes and coverage framework -->
         <exclude within="*.test.*"/>
-        <exclude within="com.example.coverage..*"/>
-        <exclude within="com.example.calculatorT"/>
+        <exclude within="com.example.calculatorT.*"/>
+        <exclude within="com.example.coverage.*"/>
         <exclude within="io.cucumber..*"/>
         <exclude within="org.junit..*"/>
     </weaver>
